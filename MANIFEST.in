@@ -1,6 +1,4 @@
-include Data/quaternions-1.npy
-include Data/quaternions-2.npy
-include Data/quaternions-3.npy
+include crimm_dock/Data/quaternions-*.npy
 include src/fft_docking/*.c
 include src/fft_docking/*.h
 include src/fft_docking/*.cu
