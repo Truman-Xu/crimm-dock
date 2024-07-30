@@ -1,16 +1,17 @@
 import os
 import numpy as np
 # C extension for FFT docking related routines
-from crimm import fft_docking 
+from crimm_dock import fft_docking
 from crimm.Visualization import View
 from crimm.Modeller import ParameterLoader
-from crimm.Docking.GridShapes import (
+from crimm.Data.constants import CC_ELEC_CHARMM as CC_ELEC
+from .GridShapes import (
     _Grid, CubeGrid, BoundingBoxGrid, TruncatedSphereGrid, ConvexHullGrid
 )
-from crimm.Data.constants import CC_ELEC_CHARMM as CC_ELEC
+
 
 data_dir = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '../Data')
+    os.path.join(os.path.dirname(__file__), 'Data')
 )
 
 class GridCoordGenerator:
@@ -25,7 +26,7 @@ class GridCoordGenerator:
         self._truncated_sphere_grid = None
         self._enlarged_convex_hull_grid = None
         # the current grid used for energy calculations
-        self.coord_grid : _Grid = None 
+        self.coord_grid : _Grid = None
         self._elec_grid = None
         self._vdw_grid_attr = None
         self._vdw_grid_rep = None

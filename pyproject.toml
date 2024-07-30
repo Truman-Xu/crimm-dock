@@ -3,23 +3,16 @@ requires = ["setuptools>=59.0", "numpy>=1.21.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "crimm"
-version = "2023.10a1"
+name = "crimm-dock"
+version = "2024.7a1"
 authors = [
   { name="Truman Xu", email="ziqiaoxu@umich.edu" },
 ]
-description = "Chemistry with the ReInvented Macromolecular"
+description = "Docking Module for Chemistry with the ReInvented Macromolecular"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    "numpy >= 1.21.2",
-    "biopython >= 1.80",
-    "ipywidgets>=8",
-    "nglview>=3.0.8",
-    "scipy>=1.7.1",
-    "requests>=2.26.0",
-    "pandas",
-    "rdkit"
+    "crimm"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -29,8 +22,8 @@ classifiers = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/Truman-Xu/crimm"
-"Bug Tracker" = "https://github.com/Truman-Xu/crimm/issues"
+"Homepage" = "https://github.com/Truman-Xu/crimm-dock"
+"Bug Tracker" = "https://github.com/Truman-Xu/crimm-dock/issues"
 
 [tool.setuptools.packages.find]
 where = ["./"]

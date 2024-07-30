@@ -3,6 +3,13 @@ import subprocess
 from setuptools import setup, Extension
 import numpy
 
+CONDA_INCLUDE_DIR = './'
+CONDA_LIB_DIR = './'
+if 'CONDA_PREFIX' in os.environ:
+    conda_path = os.environ['CONDA_PREFIX']
+    CONDA_INCLUDE_DIR = os.path.join(conda_path, 'include')
+    CONDA_LIB_DIR = os.path.join(conda_path, 'lib')
+
 CC = os.environ.get('CC')
 if CC is None:
     out = subprocess.check_output('cc --version', shell=True).decode('utf-8').lower()
@@ -31,9 +38,10 @@ else:
         f"Unknown compiler {CC} detected, please use gcc, icc, or clang."
     )
 
+
 # Define the extension module
 fft_correlate_module = Extension(
-    'crimm.fft_docking', 
+    'crimm_dock.fft_docking', 
     sources=[
         'src/fft_docking/py_bindings.c',
         'src/fft_docking/fft_correlate.c',
@@ -43,12 +51,12 @@ fft_correlate_module = Extension(
     ],
     include_dirs=[
         numpy.get_include(),
-        '/home/truman/.conda/envs/pcm-devel/include/',
+        CONDA_INCLUDE_DIR,
         './'
     ],
     libraries=['fftw3f', 'fftw3f_threads', 'm', OMP_LIB],
     library_dirs=[
-        '/home/truman/.conda/envs/pcm-devel/include/',
+        CONDA_LIB_DIR,
     ],
     define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')],
     extra_compile_args=[

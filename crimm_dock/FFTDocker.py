@@ -1,10 +1,10 @@
 import multiprocessing
 import numpy as np
 # This is a C extension module compiled from src/fft_docking/py_bindings.c
-from crimm import fft_docking
-from .GridGenerator import ReceptorGridGenerator, ProbeGridGenerator
+from crimm_dock import fft_docking
 from crimm.Data.probes.probes import create_new_probe_set
-from .GridShapes import CubeGrid, ConvexHullGrid, BoundingBoxGrid, TruncatedSphereGrid
+from .GridGenerator import ReceptorGridGenerator, ProbeGridGenerator
+from .GridShapes import CubeGrid
 
 class FFTDocker:
     def __init__(
