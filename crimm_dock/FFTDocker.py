@@ -2,8 +2,7 @@ import multiprocessing
 import numpy as np
 # This is a C extension module compiled from src/fft_docking/py_bindings.c
 from crimm_dock import fft_docking
-from crimm.Data.probes.probes import create_new_probe_set
-from .GridGenerator import ReceptorGridGenerator, ProbeGridGenerator
+from .GridGenerator import ReceptorGridGenerator, ProbeGridGenerator, PocketGridGenerator
 from .GridShapes import CubeGrid
 
 class FFTDocker:
@@ -13,7 +12,8 @@ class FFTDocker:
             rad_dielec_const=2.0,
             elec_rep_max=40, elec_attr_max=-20,
             vdw_rep_max=2.0, vdw_attr_max=-2.0, use_constant_dielectric=False,
-            rotation_level=2, n_top_poses=2000, reduce_sample_factor=10,
+            rotation_level=2, custom_rotations=None,
+            n_top_poses=2000, reduce_sample_factor=10,
             n_threads=None
         ):
         if n_threads is None:
@@ -32,12 +32,10 @@ class FFTDocker:
         self.rotation_level = rotation_level
         self.n_top_poses = n_top_poses
         self.reduce_sample_factor = reduce_sample_factor
-        ## Grids to be generated
-        self.probe_grids = None
-        self.receptor_grids = None
+
         self.recep_gen = ReceptorGridGenerator(
             grid_spacing=self.grid_spacing,
-            padding=self.receptor_padding,
+            paddings=self.receptor_padding,
             optimize_for_fft=self.optimize_grids_for_fft,
             rad_dielec_const=self.rad_dielec_const,
             elec_rep_max=self.elec_rep_max,
@@ -48,7 +46,8 @@ class FFTDocker:
         )
         self.probe_gen = ProbeGridGenerator(
             grid_spacing=self.grid_spacing,
-            rotation_search_level=self.rotation_level
+            rotation_search_level=self.rotation_level,
+            custom_rotations=custom_rotations
         )
         ## These are the outputs from docking
         self.conf_coords = None
@@ -71,11 +70,17 @@ class FFTDocker:
         self.total_energy = None
         self.result = None
         self.recep_gen.load_entity(receptor, grid_shape=self.effective_grid_shape)
-        self.receptor_grids = self.recep_gen.get_potential_grids()
 
     def load_probe(self, probe):
         self.probe_gen.load_probe(probe)
-        self.probe_grids = self.probe_gen.get_param_grids()
+
+    @property
+    def receptor_grids(self):
+        return self.recep_gen.get_potential_grids()
+
+    @property
+    def probe_grids(self):
+        return self.probe_gen.get_param_grids()
 
     # TODO: Implement batch splitting for large number of poses
     def dock(self):
@@ -115,8 +120,56 @@ class FFTDocker:
         else:
             dists_to_recep_grid = self.recep_gen.bounding_box_grid.coords[pose_id]
         probe_origins = (selected_ori_coord.max(1) + selected_ori_coord.min(1))/2
-        offsets = dists_to_recep_grid + probe_origins
+        # offsets = dists_to_recep_grid + probe_origins
+        offsets = dists_to_recep_grid
         conf_coords = selected_ori_coord+offsets[:,np.newaxis,:]
         # Add the grid spacing to the coordinates to shift it back
-        conf_coords += np.array([1.0,1.0,1.0], dtype=np.float32)
+        conf_coords += self.grid_spacing*np.array([1.0,1.0,1.0], dtype=np.float32)
         return conf_coords
+    
+class FFTPocketDocker(FFTDocker):
+    def __init__(
+        self, grid_spacing=0.5,
+        optimize_grids_for_fft=True,
+        rad_dielec_const=2.0,
+        elec_rep_max=40, elec_attr_max=-20,
+        vdw_rep_max=2.0, vdw_attr_max=-2.0, use_constant_dielectric=False,
+        rotation_level=2, custom_rotations=None,
+        n_top_poses=2000, reduce_sample_factor=10,
+        n_threads=None
+    ):
+        super().__init__(
+            grid_spacing, 0.0,
+            'bounding_box', optimize_grids_for_fft,
+            rad_dielec_const,
+            elec_rep_max, elec_attr_max,
+            vdw_rep_max, vdw_attr_max, use_constant_dielectric,
+            rotation_level, custom_rotations,
+            n_top_poses, reduce_sample_factor,
+            n_threads
+        )
+        self.recep_gen = PocketGridGenerator(
+            grid_spacing=self.grid_spacing,
+            optimize_for_fft=self.optimize_grids_for_fft,
+            rad_dielec_const=self.rad_dielec_const,
+            elec_rep_max=self.elec_rep_max,
+            elec_attr_max=self.elec_attr_max,
+            vdw_rep_max=self.vdw_rep_max,
+            vdw_attr_max=self.vdw_attr_max,
+            use_constant_dielectric=False
+        )
+
+
+    def load_receptor(self, receptor, box_dims, pocket_center=None, ref_ligand=None):
+        if receptor.level != 'C':
+            raise ValueError('Only Chain level entities are supported for docking')
+        if not receptor.is_continuous():
+            raise ValueError('Missing residues detected in the receptor entity. Please fill the gaps first.')
+        ## These are the outputs from docking
+        self.conf_coords = None
+        self.pose_id = None
+        self.orientation_id = None
+        self.top_scores = None
+        self.total_energy = None
+        self.result = None
+        self.recep_gen.load_receptor(receptor, box_dims, pocket_center, ref_ligand)

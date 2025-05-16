@@ -15,7 +15,7 @@ def is_divisible_by_2357(x):
     for factor in other_factors:
         return is_divisible_by_2357(factor)
 
-def find_optimized_dim(x):
+def optimized_dim(x):
     """Return the smallest number x' that is divisible by 2, 3, 5, or 7 
     where x' >= x (the input number)."""
     while not is_divisible_by_2357(x):
@@ -55,7 +55,7 @@ class _Grid:
         dimensions are the smallest power of (2, 3, 5, 7) that is greater than 
         the input dims."""
         for i, dim in enumerate(dims):
-            dims[i] = find_optimized_dim(dim)
+            dims[i] = optimized_dim(dim)
         return dims
 
     def _get_box_grid(
@@ -67,24 +67,27 @@ class _Grid:
         if optimize_for_fft:
             widths = grid_half_widths*2
             n_grids = np.ceil(widths/spacing).astype(int)
-            n_grids = self.find_optimal_dims(n_grids)-1
+            optimal_n_grids = self.find_optimal_dims(n_grids)
+            # optimal_n_grids - 1 here, since we use inclusive arange later
+            n_grids = optimal_n_grids - 1
             grid_half_widths = n_grids*spacing/2
         for mid_point, half_width in zip(center, grid_half_widths):
             dims.append(
                 np.arange(
                     mid_point-half_width,
-                    mid_point+half_width+spacing,
+                    # tail inclusive, total becomes n+1
+                    mid_point+half_width+0.0001,
                     spacing
                 )
             )
         x_pos, y_pos, z_pos = dims
         dim_sizes = np.array([x_pos.size, y_pos.size, z_pos.size])
         if optimize_for_fft:
-            assert np.alltrue(dim_sizes == n_grids+1)
+            assert np.alltrue(dim_sizes == optimal_n_grids)
         grid_pos = np.ascontiguousarray(np.array(
             np.meshgrid(*dims, indexing='ij')
         ).reshape(3,-1).T, dtype=np.float32)
-        
+
         return dim_sizes, grid_pos
 
 class CubeGrid(_Grid):

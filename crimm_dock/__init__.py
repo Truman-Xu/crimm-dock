@@ -1,1 +1,1 @@
-from .FFTDocker import FFTDocker
+from .FFTDocker import FFTDocker, FFTPocketDocker

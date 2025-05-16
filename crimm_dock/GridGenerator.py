@@ -1,4 +1,5 @@
 import os
+import warnings
 import numpy as np
 # C extension for FFT docking related routines
 from crimm_dock import fft_docking
@@ -8,16 +9,16 @@ from crimm.Data.constants import CC_ELEC_CHARMM as CC_ELEC
 from .GridShapes import (
     _Grid, CubeGrid, BoundingBoxGrid, TruncatedSphereGrid, ConvexHullGrid
 )
-
+from crimm.Utils.StructureUtils import get_coords
 
 data_dir = os.path.abspath(
     os.path.join(os.path.dirname(__file__), 'Data')
 )
 
 class GridCoordGenerator:
-    def __init__(self, grid_spacing, padding, optimize_for_fft) -> None:
+    def __init__(self, grid_spacing, paddings, optimize_for_fft=True) -> None:
         self.spacing = grid_spacing
-        self.paddings = padding
+        self.paddings = paddings
         self.entity = None
         self.coords = None
         self.optimize_for_fft = optimize_for_fft
@@ -60,6 +61,8 @@ class GridCoordGenerator:
         coordinates of each dimension. Should return (0, 0, 0) after the 
         transformation by `CoordManipulator.orient_coords()`.
         """
+        if self.coords is None:
+            raise ValueError('No receptor has been loaded!')
         return (self.coords.max(0) + self.coords.min(0))/2
 
     @property
@@ -67,8 +70,9 @@ class GridCoordGenerator:
         """Return the dimensions of the bounding box (in angstrom) of the 
         entity coordinates (x, y, z).
         """
-        if self.coords is not None:
-            return self.coords.ptp(0)
+        if self.coords is None:
+            raise ValueError('No receptor has been loaded!')
+        return self.coords.ptp(0)
 
     @property
     def cubic_grid(self):
@@ -177,6 +181,218 @@ component "data" value 3'''
         )
         return dx_template
 
+class PocketGridGenerator:
+    def __init__(
+            self, grid_spacing, optimize_for_fft=True,
+            rad_dielec_const=2.0, elec_rep_max=40, elec_attr_max=-20,
+            vdw_rep_max=2.0, vdw_attr_max=-1.0, use_constant_dielectric=False
+        ) -> None:
+        self.spacing = grid_spacing
+        self.entity = None
+        self.coords = None
+        self.coord_center = None
+        self.max_dims = None
+        self.optimize_for_fft = optimize_for_fft
+        self.ref_ligand = None
+        self.paddings = 0
+        self.rad_dielec_const = abs(rad_dielec_const)
+        self.elec_rep_max = abs(elec_rep_max)
+        self.elec_attr_max = -abs(elec_attr_max)
+        self.vdw_rep_max = abs(vdw_rep_max)
+        self.vdw_attr_max = -abs(vdw_attr_max)
+        self.use_cdie = use_constant_dielectric
+        self.coord_grid = None
+        self.param_loader = None
+        self.potential_grids = None
+        self._charges = None
+        self._vdw_rs = None
+        self._epsilons = None
+        self._dists = None
+        self._elec_grid = None
+        self._vdw_grid_attr = None
+        self._vdw_grid_rep = None
+
+    @property
+    def bounding_box_grid(self):
+        return self.coord_grid
+
+    def load_receptor(self, receptor, box_dims, pocket_center=None, ref_ligand=None):
+        if pocket_center is not None:
+            self.coord_center = pocket_center
+        elif ref_ligand is not None:
+            lig_coords = get_coords(ref_ligand)
+            self.coord_center = lig_coords.mean(0)
+        else:
+            raise ValueError('Either box_enter or the ref_ligand must be specified')
+        
+        if receptor.level != 'C':
+            raise ValueError(
+                f'entity must be a chain, got {receptor.level}'
+            )
+        if receptor.chain_type == "Polypeptide(L)":
+            self.param_loader = ParameterLoader('protein')
+        elif receptor.chain_type == "Polyribonucleotide":
+            self.param_loader = ParameterLoader('nucleic')
+        else:
+            raise ValueError(
+                f'entity must be a protein or an RNA, got {self.entity.chain_type}'
+            )
+        
+        self.entity=receptor
+        if isinstance(box_dims, (int, float)):
+            box_dims = (box_dims, box_dims, box_dims)
+        self.max_dims = np.array(box_dims)
+        self.coord_grid = BoundingBoxGrid(
+            self.max_dims, self.coord_center, self.spacing, self.paddings,
+            self.optimize_for_fft
+        )
+        self.coords = get_coords(receptor).astype(np.float32)
+        self._collect_params()
+        # clear the pairwise dists and grids
+        self._dists = None
+        self._elec_grid = None
+        self._vdw_grid_attr = None
+        self._vdw_grid_rep = None
+        
+    def _collect_params(self):
+        charges = []
+        vdw_rs = []
+        epsilons = []
+        for atom in self.entity.get_atoms():
+            atom_type = atom.topo_definition.atom_type
+            charges.append(atom.topo_definition.charge)
+            nb_param = self.param_loader['nonbonded'][atom_type]
+            vdw_rs.append(nb_param.rmin_half) 
+            epsilons.append(nb_param.epsilon)
+        # Single precision is enough for energy calculations
+        self._charges = np.asarray(charges, dtype=np.float32, order='C')
+        self._vdw_rs = np.asarray(vdw_rs, dtype=np.float32, order='C')
+        self._vdw_rs *= 2 # convert rmin_half to rmin
+        self._epsilons = np.asarray(epsilons, dtype=np.float32, order='C')
+    
+    def _fill_dx(self, grid, values_str, spacing=None):
+        xd, yd, zd = self.coord_grid.points_per_dim
+        min_x, min_y, min_z = self.coord_grid.min_coords
+        spacing = self.spacing
+        dx_template = (
+            f'''#Generated dx file for fft grid
+object 1 class gridpositions counts {xd} {yd} {zd}
+origin {min_x:e} {min_y:e} {min_z:e}
+delta {spacing:e} 0.000000e+000 0.000000e+000
+delta 0.000000e+000 {spacing:e} 0.000000e+000
+delta 0.000000e+000 0.000000e+000 {spacing:e}
+object 2 class gridconnections counts {xd} {yd} {zd}
+object 3 class array type double rank 0 items {grid.size} data follows
+{values_str}
+attribute "dep" string "positions"
+object "regular positions regular connections" class field
+component "positions" value 1
+component "connections" value 2
+component "data" value 3'''
+        )
+        return dx_template
+    
+    def convert_to_3d_grid(self, grid_vals):
+        """Convert a 1D grid array to a 3D grid array. Values in trucated sphere 
+        and convex hull grids will be converted to the bounding box grid, 
+        and their void will be filled with zeros."""
+        return grid_vals.reshape(self.coord_grid.points_per_dim)
+    
+    def get_attr_vdw_grid(self):
+        """Get the van der Waals attractive energy grid. If convert_shape is True,
+        the grid will be converted to the bounding box shape, where the void will
+        be filled with zeros. The returned grid will be 3D array. Otherwise, the
+        grid will be returned as a 1D array with only values within the shape."""
+        if self._vdw_grid_attr is None:
+            self.genernate_grids()
+        return self.convert_to_3d_grid(self._vdw_grid_attr)
+
+    def get_rep_vdw_grid(self):
+        """Get the van der Waals repulsive energy grid. If convert_shape is True,
+        the grid will be converted to the bounding box shape, where the void will
+        be filled with zeros. The returned grid will be 3D array. Otherwise, the
+        grid will be returned as a 1D array with only values within the shape."""
+        if self._vdw_grid_rep is None:
+            self.genernate_grids()
+        return self.convert_to_3d_grid(self._vdw_grid_rep)
+
+    def get_elec_grid(self):
+        """Get the electrostatic energy grid. If convert_shape is True,
+        the grid will be converted to the bounding box shape, where the void will
+        be filled with zeros. The returned grid will be 3D array. Otherwise, the
+        grid will be returned as a 1D array with only values within the shape."""
+        if self._elec_grid is None:
+            self.genernate_grids()
+        return self.convert_to_3d_grid(self._elec_grid)
+
+    def get_potential_grids(self):
+        """Get all potential energy grids (electrostatic, van der Waals attractive, and
+        van der Waals repulsive). The returned grids will be 3D array."""
+        if self.potential_grids is None:
+            self.genernate_grids()
+        return self.potential_grids
+
+    def genernate_grids(self):
+        """Generate and return all grids (electrostatic, van der Waals attractive, and
+        van der Waals repulsive) as a 3D array."""
+        self._elec_grid, self._vdw_grid_attr, self._vdw_grid_rep = \
+            fft_docking.generate_grids(
+                self.coord_grid.coords, self.coords, self._charges, self._epsilons,
+                self._vdw_rs, CC_ELEC, self.rad_dielec_const, self.elec_rep_max,
+                self.elec_attr_max, self.vdw_rep_max, self.vdw_attr_max, self.use_cdie
+            )
+        # Set a large value for repulsive vdw to avoid molecule sticking on the edge
+        vdwr = self.convert_to_3d_grid(self._vdw_grid_rep)
+        edge_repl = vdwr.max() * 100
+        vdwr[0] = edge_repl
+        vdwr[-1] = edge_repl
+        vdwr[:,0] = edge_repl
+        vdwr[:,-1] = edge_repl
+        vdwr[:,:,0] = edge_repl
+        vdwr[:,:,-1] = edge_repl
+        self._vdw_grid_rep = vdwr.flatten()
+
+        self.potential_grids = np.stack((
+            self.convert_to_3d_grid(self._elec_grid),
+            self.convert_to_3d_grid(self._vdw_grid_attr),
+            self.convert_to_3d_grid(self._vdw_grid_rep)
+        )).astype(np.float32)
+
+    def save_dx(self, filename, grid_vals):
+        """Save a grid to a .dx file."""
+        if len(grid_vals.shape) > 1:
+            grid_vals = grid_vals.flatten()
+        values_str = ''
+        counter = 0
+        for value in grid_vals:
+            counter += 1
+            values_str += f'{value:e} '
+            if counter % 6 == 0:
+                values_str += '\n'
+
+        dx_str = self._fill_dx(grid_vals, values_str, self.spacing)
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(dx_str)
+            f.flush()
+
+    def show_pocket_atoms(self):
+        all_atoms = [atom for atom in self.entity.get_atoms()]
+        is_in_box = (self.coords >= self.coord_grid.coords.min(0)) * (self.coords <= self.coord_grid.coords.max(0))
+
+        select_idx = np.where(np.all(is_in_box, axis=1))[0]
+
+        select_atoms = []
+        for idx in select_idx:
+            select_atoms.append(all_atoms[idx])
+
+        view = View()
+
+        view.load_entity(self.entity)
+        view.highlight_atoms(select_atoms)
+        view.add_surface(component=0, opacity=0.5)
+
+        return view
+
 class ReceptorGridGenerator(GridCoordGenerator):
     """A potential energy grid generator for a receptor molecule."""
     grid_shape_dict = {
@@ -186,11 +402,11 @@ class ReceptorGridGenerator(GridCoordGenerator):
         'convex_hull' : 'convex_hull_grid'
     }
     def __init__(
-            self, grid_spacing, padding, optimize_for_fft,
+            self, grid_spacing, paddings, optimize_for_fft,
             rad_dielec_const=2.0, elec_rep_max=40, elec_attr_max=-20,
             vdw_rep_max=2.0, vdw_attr_max=-1.0, use_constant_dielectric=False
         ) -> None:
-        super().__init__(grid_spacing, padding, optimize_for_fft)
+        super().__init__(grid_spacing, paddings, optimize_for_fft)
         self.optimize_for_fft = optimize_for_fft
         self.rad_dielec_const = abs(rad_dielec_const)
         self.elec_rep_max = abs(elec_rep_max)
@@ -209,8 +425,8 @@ class ReceptorGridGenerator(GridCoordGenerator):
         entity : :obj:`crimm.StructEntity.Chain` 
         The entity to be loaded.
         The spacing of the grid in Angstroms.
-        padding : float
-        The padding to be added to the grid dimensions (in Angstroms).
+        paddings : float or int
+        The paddings to be added to the grid dimensions (in Angstroms).
         grid_shape : str, optional
         The geometric shape of the grid. Must be one of 'cubic', 'bounding_box', 
         'truncated_sphere', or 'convex_hull'. Default is 'convex_hull'.
@@ -365,6 +581,9 @@ class ProbeGridGenerator(GridCoordGenerator):
     Default is 2. Number of rotations : {0: No rotation, 1: 576, 2: 4068, 3: 36864}
     The rotations are represented by quaternions (scalar-first) that are evenly 
     sampled from the rotational space.
+    custom_rotations: np.ndarray (N, 4), optional
+    An array of scalar-first quaternions (w, x, y, z) with shape of (N, 4) to use 
+    to search in rotational space for probe orientations.
     """
     _rot_search_levels = {
         0: np.array([[1, 0, 0, 0]], dtype=np.float32), # identity quaternion (no rotation)
@@ -373,19 +592,32 @@ class ProbeGridGenerator(GridCoordGenerator):
         3: np.load(os.path.join(data_dir, 'quaternion-3.npy')).astype(np.float32)
     }
 
-    def __init__(self, grid_spacing, rotation_search_level=2) -> None:
-        super().__init__(grid_spacing, padding=0, optimize_for_fft=False)
-        if rotation_search_level not in self._rot_search_levels:
+    def __init__(self, grid_spacing, rotation_search_level=2, custom_rotations=None) -> None:
+        super().__init__(grid_spacing, paddings=0, optimize_for_fft=False)
+        if custom_rotations is not None:
+            if not isinstance(custom_rotations, np.ndarray) or (
+                len(custom_rotations.shape) != 2
+                ) or (custom_rotations.shape[-1] != 4):
+                raise TypeError(
+                    "Numpy array of shape (N, 4) is needed to use as quaterinions! "
+                )
+            warnings.warn(
+                f"Custom Quaternions are used! Rotation search level {rotation_search_level} is ignored!"
+            )
+            self.quats = custom_rotations
+        elif rotation_search_level not in self._rot_search_levels:
             raise ValueError(
                 f'rotation_search_level must be one of {list(self._rot_search_levels.keys())}'
             )
+        else:
+            self.quats = self._rot_search_levels[rotation_search_level]
         self._grid_shape = "bounding_box"
         self.param_loader = ParameterLoader('cgenff')
         self.param_grids = None
         self._elec_grid = None
         self._vdw_grid_attr = None
         self._vdw_grid_rep = None
-        self.quats = self._rot_search_levels[rotation_search_level]
+        
         self.rotated_coords = None
 
     def load_probe(self, probe):

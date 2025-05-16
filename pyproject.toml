@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crimm-dock"
-version = "2024.7a1"
+version = "2025.5a1"
 authors = [
   { name="Truman Xu", email="ziqiaoxu@umich.edu" },
 ]
