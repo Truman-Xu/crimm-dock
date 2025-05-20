@@ -548,23 +548,18 @@ class ReceptorGridGenerator(GridCoordGenerator):
         boxed_grid = self.convert_to_boxed_grid(grid_vals)
         return boxed_grid.reshape(self.coord_grid.points_per_dim)
 
-    def save_dx(self, filename, grid_vals, convert_shape=True):
+    def save_dx(self, filename, grid_vals):
         """Save a grid to a .dx file."""
-        if convert_shape:
-            boxed_grid = self.convert_to_boxed_grid(grid_vals)
-        else:
-            # Assume the grid is already in the correct box shape
-            boxed_grid = grid_vals
         
         values_str = ''
         counter = 0
-        for value in boxed_grid:
+        for value in grid_vals:
             counter += 1
             values_str += f'{value:e} '
             if counter % 6 == 0:
                 values_str += '\n'
 
-        dx_str = self._fill_dx(boxed_grid, values_str, self.spacing)
+        dx_str = self._fill_dx(grid_vals, values_str, self.spacing)
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(dx_str)
             f.flush() # flush the buffer to ensure the file is written
@@ -619,6 +614,7 @@ class ProbeGridGenerator(GridCoordGenerator):
         self._vdw_grid_rep = None
         
         self.rotated_coords = None
+        self._original_center = None
 
     def load_probe(self, probe):
         """Load an entity and generate the grid coordinates and energy potentials
@@ -630,6 +626,9 @@ class ProbeGridGenerator(GridCoordGenerator):
         The entity to be loaded.
         """
         super().load_entity(probe)
+        # Probe has to be centered on the origin for rotations
+        self._original_center = self.coord_center
+        self.coords -= self.coord_center
         self._grid_shape = "cubic"
         self._collect_params()
         self.param_grids = None

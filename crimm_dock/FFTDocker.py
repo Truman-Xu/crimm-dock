@@ -51,7 +51,7 @@ class FFTDocker:
         )
         ## These are the outputs from docking
         self.conf_coords = None
-        self.pose_id = None
+        self.position_id = None
         self.orientation_id = None
         self.top_scores = None
         self.total_energy = None
@@ -64,7 +64,7 @@ class FFTDocker:
             raise ValueError('Missing residues detected in the receptor entity. Please fill the gaps first.')
         ## These are the outputs from docking
         self.conf_coords = None
-        self.pose_id = None
+        self.position_id = None
         self.orientation_id = None
         self.top_scores = None
         self.total_energy = None
@@ -103,29 +103,39 @@ class FFTDocker:
         return np.squeeze(result)
 
     def rank_poses(self):
-        self.top_scores, self.pose_id, self.orientation_id = fft_docking.rank_poses(
+        self.top_scores, self.position_id, self.orientation_id = fft_docking.rank_poses(
             self.total_energy,
             top_n_poses=self.n_top_poses,
             sample_factor=self.reduce_sample_factor,
             n_threads=self.n_threads
         )
-        self.conf_coords = self._get_conf_coords(self.pose_id, self.orientation_id)
+        self.conf_coords = self._get_conf_coords(self.position_id, self.orientation_id)
         return self.top_scores, self.conf_coords
 
-    def _get_conf_coords(self, pose_id, orientation_id):
+    def _get_conf_coords(self, position_id, orientation_id):
         selected_ori_coord = self.probe_gen.rotated_coords[orientation_id]
         coord_grid = self.recep_gen.coord_grid
         if isinstance(coord_grid, CubeGrid):
-            dists_to_recep_grid = coord_grid.coords[pose_id]
+            dists_to_recep_grid = coord_grid.coords[position_id]
         else:
-            dists_to_recep_grid = self.recep_gen.bounding_box_grid.coords[pose_id]
-        probe_origins = (selected_ori_coord.max(1) + selected_ori_coord.min(1))/2
-        # offsets = dists_to_recep_grid + probe_origins
-        offsets = dists_to_recep_grid
+            dists_to_recep_grid = self.recep_gen.bounding_box_grid.coords[position_id]
+        
+        # Add distance to origin and the half widths of the probe to the coordinates to shift it back
+        offsets = dists_to_recep_grid + selected_ori_coord.ptp(1)/2
         conf_coords = selected_ori_coord+offsets[:,np.newaxis,:]
-        # Add the grid spacing to the coordinates to shift it back
-        conf_coords += self.grid_spacing*np.array([1.0,1.0,1.0], dtype=np.float32)
+        
+        # conf_coords += self.grid_spacing*np.array([1.0,1.0,1.0], dtype=np.float32)
         return conf_coords
+    
+    def save_receptor_grids(self, prefix: str):
+        vdwa = self.recep_gen.get_attr_vdw_grid(False)
+        vdwr = self.recep_gen.get_rep_vdw_grid(False)
+        elec = self.recep_gen.get_elec_grid(False)
+        if not isinstance(prefix, str):
+            raise TypeError('Prefix has to be string!')
+        self.recep_gen.save_dx(prefix+'_attr_vdw.dx', vdwa)
+        self.recep_gen.save_dx(prefix+'_rep_vdw.dx', vdwr)
+        self.recep_gen.save_dx(prefix+'_elec.dx', elec)
     
 class FFTPocketDocker(FFTDocker):
     def __init__(
@@ -167,9 +177,19 @@ class FFTPocketDocker(FFTDocker):
             raise ValueError('Missing residues detected in the receptor entity. Please fill the gaps first.')
         ## These are the outputs from docking
         self.conf_coords = None
-        self.pose_id = None
+        self.position_id = None
         self.orientation_id = None
         self.top_scores = None
         self.total_energy = None
         self.result = None
         self.recep_gen.load_receptor(receptor, box_dims, pocket_center, ref_ligand)
+
+    def save_receptor_grids(self, prefix: str):
+        vdwa = self.recep_gen.get_attr_vdw_grid()
+        vdwr = self.recep_gen.get_rep_vdw_grid()
+        elec = self.recep_gen.get_elec_grid()
+        if not isinstance(prefix, str):
+            raise TypeError('Prefix has to be string!')
+        self.recep_gen.save_dx(prefix+'_attr_vdw.dx', vdwa)
+        self.recep_gen.save_dx(prefix+'_rep_vdw.dx', vdwr)
+        self.recep_gen.save_dx(prefix+'_elec.dx', elec)
