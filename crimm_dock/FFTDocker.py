@@ -58,11 +58,6 @@ class FFTDocker:
         self.result = None
 
     def load_receptor(self, receptor):
-        if receptor.level != 'C':
-            raise ValueError('Only Chain level entities are supported for docking')
-        if not receptor.is_continuous():
-            raise ValueError('Missing residues detected in the receptor entity. Please fill the gaps first.')
-        ## These are the outputs from docking
         self.conf_coords = None
         self.position_id = None
         self.orientation_id = None

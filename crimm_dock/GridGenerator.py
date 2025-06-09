@@ -3,9 +3,11 @@ import warnings
 import numpy as np
 # C extension for FFT docking related routines
 from crimm_dock import fft_docking
+from crimm.Utils.StructureUtils import get_coords
 from crimm.Visualization import View
 from crimm.Modeller import ParameterLoader
 from crimm.Data.constants import CC_ELEC_CHARMM as CC_ELEC
+from crimm.Data.probes.probes import _Probe
 from .GridShapes import (
     _Grid, CubeGrid, BoundingBoxGrid, TruncatedSphereGrid, ConvexHullGrid
 )
@@ -14,6 +16,53 @@ from crimm.Utils.StructureUtils import get_coords
 data_dir = os.path.abspath(
     os.path.join(os.path.dirname(__file__), 'Data')
 )
+
+def get_chain_nonbonded_dict(chain):
+    chain_type = chain.chain_type
+    if chain_type == "Polypeptide(L)":
+        param_loader = ParameterLoader('protein')
+    elif chain_type == "Polyribonucleotide":
+        param_loader = ParameterLoader('nucleic')
+    elif chain_type in ('Ligand', 'NucleosidePhosphate', 'CoSolvent'):
+        param_loader = ParameterLoader('cgenff')
+    elif chain_type in ('Ion', 'Solvent'):
+        param_loader = ParameterLoader('water_ions')
+    else:
+        raise TypeError(f'{chain_type} not supported in FFT Docking!')
+    return param_loader['nonbonded']
+    
+
+def get_entity_nonbonded_dict(entity):
+    nonbonded_dict = {}
+    if entity.level == 'C':
+        nonbonded_dict.update(get_chain_nonbonded_dict(entity))
+    elif entity.level == 'M':
+        for chain in entity:
+            nonbonded_dict.update(get_chain_nonbonded_dict(chain))
+    elif entity.level == 'R':
+        if isinstance(entity, _Probe):
+            # Special case for predefined probe residues
+            return ParameterLoader('cgenff')['nonbonded']
+        nonbonded_dict.update(get_chain_nonbonded_dict(entity.parent))
+    else:
+        raise TypeError(
+            'Only Model, Chain, or Residue level entities are accepted for FFT Docking, '
+            f'while {entity.level} level is provided'
+        )
+    return nonbonded_dict
+
+def get_nonbonded_dict(entity):
+    """Return a dictionary of non-bonded forcefield parameters for an entity of 
+    level in M, C, R or a list consisting of such entities"""
+
+    if isinstance(entity, list):
+        nonbonded_dict = {}
+        for _entity in entity:
+            nonbonded_dict.update(get_entity_nonbonded_dict(_entity))
+        return nonbonded_dict
+
+    else:
+        return get_entity_nonbonded_dict(entity)
 
 class GridCoordGenerator:
     def __init__(self, grid_spacing, paddings, optimize_for_fft=True) -> None:
@@ -36,23 +85,31 @@ class GridCoordGenerator:
         self._epsilons = None
         self._vdw_rs = None
         self._grid_shape = None
-        self.param_loader = {}
+        self.nonbonded_dict = {}
 
     def load_entity(self, entity):
         """Load entity and set grid spacing and paddings."""
         self.entity = entity
-        self.coords = self._extract_coords()
+        self.nonbonded_dict = get_nonbonded_dict(self.entity)
+        self.coords = get_coords(self.entity).astype(np.float32)
         # remove all grid attributes if existing
         self._cubic_grid = None
         self._bounding_box_grid = None
         self._truncated_sphere_grid = None
         self._enlarged_convex_hull_grid = None
 
-    def _extract_coords(self) -> np.array:
-        coords = []
-        for atom in self.entity.get_atoms():
-            coords.append(atom.coord)
-        return np.asarray(coords, dtype=np.float32)
+    @property
+    def atoms(self):
+        """Return the list of atoms by which the energy grids are generated. 
+        Any disordered atoms will only appear at the first alternative locations 
+        (altloc A) listed in the mmCIF/PDB file source"""
+        if isinstance(self.entity, list):
+            atoms = []
+            for _entity in self.entity:
+                atoms.extend(list(_entity.get_atoms()))
+        else:
+            atoms = list(self.entity.get_atoms())
+        return atoms
 
     @property
     def coord_center(self):
@@ -146,11 +203,16 @@ class GridCoordGenerator:
         charges = []
         vdw_rs = []
         epsilons = []
-        for atom in self.entity.get_atoms():
+        for atom in self.atoms:
+            if atom.topo_definition is None:
+                raise ValueError(
+                    'Parameter not generated for {atom} from {atom.parent}.'
+                    'Please use TopologyGenerator to generate topology and parameter first.'
+                )
             atom_type = atom.topo_definition.atom_type
             charges.append(atom.topo_definition.charge)
-            nb_param = self.param_loader['nonbonded'][atom_type]
-            vdw_rs.append(nb_param.rmin_half) 
+            nb_param = self.nonbonded_dict[atom_type]
+            vdw_rs.append(nb_param.rmin_half)
             epsilons.append(nb_param.epsilon)
         # Single precision is enough for energy calculations
         self._charges = np.asarray(charges, dtype=np.float32, order='C')
@@ -202,7 +264,6 @@ class PocketGridGenerator:
         self.vdw_attr_max = -abs(vdw_attr_max)
         self.use_cdie = use_constant_dielectric
         self.coord_grid = None
-        self.param_loader = None
         self.potential_grids = None
         self._charges = None
         self._vdw_rs = None
@@ -211,6 +272,20 @@ class PocketGridGenerator:
         self._elec_grid = None
         self._vdw_grid_attr = None
         self._vdw_grid_rep = None
+        self.nonbonded_dict = {}
+
+    @property
+    def atoms(self):
+        """Return the list of atoms by which the energy grids are generated. 
+        Any disordered atoms will only appear at the first alternative locations 
+        (altloc A) listed in the mmCIF/PDB file source"""
+        if isinstance(self.entity, list):
+            atoms = []
+            for _entity in self.entity:
+                atoms.extend(list(_entity.get_atoms()))
+        else:
+            atoms = list(self.entity.get_atoms())
+        return atoms
 
     @property
     def bounding_box_grid(self):
@@ -224,21 +299,10 @@ class PocketGridGenerator:
             self.coord_center = lig_coords.mean(0)
         else:
             raise ValueError('Either box_enter or the ref_ligand must be specified')
-        
-        if receptor.level != 'C':
-            raise ValueError(
-                f'entity must be a chain, got {receptor.level}'
-            )
-        if receptor.chain_type == "Polypeptide(L)":
-            self.param_loader = ParameterLoader('protein')
-        elif receptor.chain_type == "Polyribonucleotide":
-            self.param_loader = ParameterLoader('nucleic')
-        else:
-            raise ValueError(
-                f'entity must be a protein or an RNA, got {self.entity.chain_type}'
-            )
-        
+
         self.entity=receptor
+        self.nonbonded_dict = get_nonbonded_dict(self.entity)
+
         if isinstance(box_dims, (int, float)):
             box_dims = (box_dims, box_dims, box_dims)
         self.max_dims = np.array(box_dims)
@@ -258,11 +322,16 @@ class PocketGridGenerator:
         charges = []
         vdw_rs = []
         epsilons = []
-        for atom in self.entity.get_atoms():
+        for atom in self.atoms:
+            if atom.topo_definition is None:
+                raise ValueError(
+                    'Parameter not generated for {atom} from {atom.parent}.'
+                    'Please use TopologyGenerator to generate topology and parameter first.'
+                )
             atom_type = atom.topo_definition.atom_type
             charges.append(atom.topo_definition.charge)
-            nb_param = self.param_loader['nonbonded'][atom_type]
-            vdw_rs.append(nb_param.rmin_half) 
+            nb_param = self.nonbonded_dict[atom_type]
+            vdw_rs.append(nb_param.rmin_half)
             epsilons.append(nb_param.epsilon)
         # Single precision is enough for energy calculations
         self._charges = np.asarray(charges, dtype=np.float32, order='C')
@@ -434,19 +503,6 @@ class ReceptorGridGenerator(GridCoordGenerator):
         if grid_shape not in self.grid_shape_dict:
             raise ValueError(
                 f'grid_type must be one of {list(self.grid_shape_dict.keys())}'
-            )
-        #TODO: add support for multiple chains
-        if entity.level != 'C':
-            raise ValueError(
-                f'entity must be a chain, got {entity.level}'
-            )
-        if entity.chain_type == "Polypeptide(L)":
-            self.param_loader = ParameterLoader('protein')
-        elif entity.chain_type == "Polyribonucleotide":
-            self.param_loader = ParameterLoader('nucleic')
-        else:
-            raise ValueError(
-                f'entity must be a protein or an RNA, got {self.entity.chain_type}'
             )
         super().load_entity(entity)
         self._grid_shape = grid_shape
