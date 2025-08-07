@@ -83,7 +83,7 @@ class _Grid:
         x_pos, y_pos, z_pos = dims
         dim_sizes = np.array([x_pos.size, y_pos.size, z_pos.size])
         if optimize_for_fft:
-            assert np.alltrue(dim_sizes == optimal_n_grids)
+            assert np.all(dim_sizes == optimal_n_grids)
         grid_pos = np.ascontiguousarray(np.array(
             np.meshgrid(*dims, indexing='ij')
         ).reshape(3,-1).T, dtype=np.float32)

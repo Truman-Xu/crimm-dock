@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crimm-dock"
-version = "2025.5a1"
+version = "2025.8a1"
 authors = [
   { name="Truman Xu", email="ziqiaoxu@umich.edu" },
 ]
@@ -12,7 +12,8 @@ description = "Docking Module for Chemistry with the ReInvented Macromolecular"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    "crimm"
+    "crimm",
+    "scikit-learn"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
