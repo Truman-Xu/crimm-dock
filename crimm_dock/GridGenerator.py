@@ -7,7 +7,7 @@ from crimm.Utils.StructureUtils import get_coords
 from crimm.Visualization import View
 from crimm.Modeller import ParameterLoader
 from crimm.Data.constants import CC_ELEC_CHARMM as CC_ELEC
-from crimm.Data.probes.probes import _Probe
+from crimm_dock.Data.probes.probes import _Probe
 from .GridShapes import (
     _Grid, CubeGrid, BoundingBoxGrid, TruncatedSphereGrid, ConvexHullGrid
 )
