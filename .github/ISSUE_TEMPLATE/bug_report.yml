@@ -1,0 +1,26 @@
+name: Bug report
+description: Something fails or gives wrong output
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: crimm-dock, crimm and Python versions
+      placeholder: "crimm-dock 2025.8a2, crimm 2026.2.2, Python 3.12"
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Receptor/probe and settings
+      description: Structure(s) used, grid spacing/shape, and the docking parameters.
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback or wrong output
+      description: If the output is scientifically wrong rather than an error (docking energies, poses, grid values), say what you expected and how you checked (e.g. against the CHARMM reference or the FASTDOCK/CDOCKER papers).
+      render: text
+    validations:
+      required: true
