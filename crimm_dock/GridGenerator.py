@@ -758,7 +758,7 @@ class ProbeGridGenerator(GridCoordGenerator):
     The spacing of the grid in Angstroms.
     rotation_search_level : int, optional
     The level of rotations to be used for the probe. Must be one of 0, 1, 2, or 3.
-    Default is 2. Number of rotations : {0: No rotation, 1: 576, 2: 4068, 3: 36864}
+    Default is 2. Number of rotations : {0: No rotation, 1: 576, 2: 4608, 3: 36864}
     The rotations are represented by quaternions (scalar-first) that are evenly 
     sampled from the rotational space.
     custom_rotations: np.ndarray (N, 4), optional
